@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>GeoTrack Premium | Supervisor Panel</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script
+        src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCai1d_umVqDKbwGfCl--y2wPXykg2XlEk&loading=async&callback=initMap"
+        async
+        defer></script>
+    <style>
+        body { font-family: 'Roboto', sans-serif; background: #0A0B10; color: #fff; margin: 0; padding: 0; overflow: hidden; }
+        #map { height: 100vh; width: 100%; position: absolute; top: 0; left: 0; }
+        .dashboard { position: fixed; top: 20px; left: 20px; background: rgba(28, 29, 36, 0.95); padding: 25px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.05); z-index: 10; width: 340px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); backdrop-filter: blur(10px); max-height: calc(100vh - 40px); overflow: auto; }
+        h2 { color: #6C63FF; letter-spacing: 2px; margin-top: 0; font-size: 1.4rem; font-weight: 900; }
+        .stat { border-bottom: 1px solid rgba(255,255,255,0.05); padding: 15px 0; }
+        .stat-label { font-size: 0.8rem; color: #888; text-transform: uppercase; margin-bottom: 5px; }
+        .stat-value { font-size: 1.1rem; color: #fff; font-weight: bold; }
+        .live-indicator { display: inline-block; width: 10px; height: 10px; background: #00FF94; border-radius: 50%; margin-right: 10px; box-shadow: 0 0 10px #00FF94; }
+        .live-indicator.offline { background: #FF6B6B; box-shadow: 0 0 10px #FF6B6B; }
+        .devices-title { margin-top: 20px; font-size: 0.8rem; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+        .device-list { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+        .device-card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.05); border-radius: 16px; padding: 14px; cursor: pointer; transition: 0.2s ease; }
+        .device-card:hover, .device-card.active { border-color: rgba(108, 99, 255, 0.8); background: rgba(108, 99, 255, 0.14); }
+        .device-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+        .device-name { font-weight: 700; }
+        .device-meta { color: #A5A7B5; font-size: 0.85rem; margin-top: 6px; }
+        .device-status { font-size: 0.75rem; font-weight: 700; padding: 4px 8px; border-radius: 999px; }
+        .online { background: rgba(0,255,148,0.12); color: #00FF94; }
+        .offline { background: rgba(255,255,255,0.08); color: #B0B3C1; }
+        .empty { padding: 16px 0; color: #A5A7B5; }
+        @media (max-width: 768px) {
+            .dashboard { left: 12px; right: 12px; top: 12px; width: auto; max-height: 50vh; }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <h2>GEOTRACK LIVE</h2>
+        <div class="stat">
+            <div class="stat-label">System Status</div>
+            <div id="system-status" class="stat-value"><span id="status-dot" class="live-indicator offline"></span>Connecting...</div>
+        </div>
+        <div class="stat">
+            <div class="stat-label">Socket Server</div>
+            <div id="server-url" class="stat-value">Detecting...</div>
+        </div>
+        <div class="stat">
+            <div class="stat-label">Connected Devices</div>
+            <div id="device-count" class="stat-value">0</div>
+        </div>
+        <div class="stat">
+            <div class="stat-label">Selected Device</div>
+            <div id="target-id" class="stat-value">Waiting for data...</div>
+        </div>
+        <div class="stat">
+            <div class="stat-label">Last Coordinates</div>
+            <div id="coords" class="stat-value">-</div>
+        </div>
+        <div class="stat">
+            <div class="stat-label">Last Ping</div>
+            <div id="timestamp" class="stat-value">Never</div>
+        </div>
+        <div class="devices-title">Tracked Devices</div>
+        <div id="device-list" class="device-list">
+            <div class="empty">No devices have reported yet.</div>
+        </div>
+    </div>
+    <div id="map"></div>
+
+    <script>
+        let map;
+        let selectedDeviceId = null;
+        let pendingSnapshot = null;
+        const devices = new Map();
+        const markers = new Map();
+        const socketUrl = resolveSocketUrl();
+        const socket = io(socketUrl, {
+            transports: ['websocket', 'polling'],
+        });
+
+        const darkStyle = [
+            { "elementType": "geometry", "stylers": [{ "color": "#121212" }] },
+            { "elementType": "labels.text.fill", "stylers": [{ "color": "#757575" }] },
+            { "featureType": "road", "elementType": "geometry", "stylers": [{ "color": "#2c2c2c" }] },
+            { "featureType": "water", "elementType": "geometry", "stylers": [{ "color": "#000000" }] }
+        ];
+
+        document.getElementById('server-url').innerText = socketUrl;
+
+        function resolveSocketUrl() {
+            const params = new URLSearchParams(window.location.search);
+            const queryValue = params.get('socketUrl');
+            if (queryValue) {
+                return queryValue;
+            }
+
+            if (window.location.port === '3000') {
+                return window.location.origin;
+            }
+
+            const hostname = window.location.hostname || 'localhost';
+            return `http://${hostname}:3000`;
+        }
+
+        function setConnectionStatus(connected) {
+            const status = document.getElementById('system-status');
+            const dot = document.getElementById('status-dot');
+
+            if (connected) {
+                status.innerHTML = '<span id="status-dot" class="live-indicator"></span>Monitoring Active';
+                return;
+            }
+
+            status.innerHTML = '<span id="status-dot" class="live-indicator offline"></span>Disconnected';
+        }
+
+        function initMap() {
+            map = new google.maps.Map(document.getElementById('map'), {
+                zoom: 4,
+                center: { lat: 37.7749, lng: -122.4194 },
+                styles: darkStyle,
+                disableDefaultUI: true,
+            });
+
+            if (pendingSnapshot) {
+                renderSnapshot(pendingSnapshot);
+                pendingSnapshot = null;
+            }
+        }
+
+        function markerIcon(device) {
+            return {
+                path: google.maps.SymbolPath.CIRCLE,
+                scale: device.isOnline ? 11 : 9,
+                fillColor: device.isOnline ? '#6C63FF' : '#7E859B',
+                fillOpacity: 1,
+                strokeColor: '#ffffff',
+                strokeWeight: 2,
+            };
+        }
+
+        function updateDetails(device) {
+            if (!device) {
+                document.getElementById('target-id').innerText = 'Waiting for data...';
+                document.getElementById('coords').innerText = '-';
+                document.getElementById('timestamp').innerText = 'Never';
+                return;
+            }
+
+            document.getElementById('target-id').innerText = `${device.deviceName} (${device.platform})`;
+            document.getElementById('coords').innerText = `${device.lat.toFixed(5)}, ${device.lng.toFixed(5)}`;
+            document.getElementById('timestamp').innerText = new Date(device.timestamp).toLocaleString();
+        }
+
+        function focusDevice(deviceId) {
+            const device = devices.get(deviceId);
+            if (!device || !map) {
+                return;
+            }
+
+            selectedDeviceId = deviceId;
+            map.panTo({ lat: device.lat, lng: device.lng });
+            map.setZoom(16);
+            updateDetails(device);
+            renderDeviceList();
+        }
+
+        function renderDeviceList() {
+            const container = document.getElementById('device-list');
+            const items = Array.from(devices.values()).sort((a, b) =>
+                a.deviceName.localeCompare(b.deviceName)
+            );
+
+            document.getElementById('device-count').innerText = String(items.length);
+
+            if (!items.length) {
+                container.innerHTML = '<div class="empty">No devices have reported yet.</div>';
+                updateDetails(null);
+                return;
+            }
+
+            container.innerHTML = items.map((device) => `
+                <div class="device-card ${device.deviceId === selectedDeviceId ? 'active' : ''}" data-device-id="${device.deviceId}">
+                    <div class="device-row">
+                        <div class="device-name">${device.deviceName}</div>
+                        <div class="device-status ${device.isOnline ? 'online' : 'offline'}">${device.isOnline ? 'ONLINE' : 'OFFLINE'}</div>
+                    </div>
+                    <div class="device-meta">${device.platform} | ${new Date(device.timestamp).toLocaleTimeString()}</div>
+                </div>
+            `).join('');
+
+            container.querySelectorAll('.device-card').forEach((card) => {
+                card.addEventListener('click', () => focusDevice(card.dataset.deviceId));
+            });
+        }
+
+        function renderSnapshot(snapshot) {
+            if (!map || !window.google) {
+                pendingSnapshot = snapshot;
+                return;
+            }
+
+            const nextIds = new Set(snapshot.map((device) => device.deviceId));
+
+            markers.forEach((marker, deviceId) => {
+                if (!nextIds.has(deviceId)) {
+                    marker.setMap(null);
+                    markers.delete(deviceId);
+                    devices.delete(deviceId);
+                }
+            });
+
+            const bounds = new google.maps.LatLngBounds();
+            let hasCoordinates = false;
+
+            snapshot.forEach((device) => {
+                devices.set(device.deviceId, device);
+                const position = { lat: device.lat, lng: device.lng };
+                let marker = markers.get(device.deviceId);
+
+                if (!marker) {
+                    marker = new google.maps.Marker({
+                        map,
+                        position,
+                        title: device.deviceName,
+                        icon: markerIcon(device),
+                    });
+                    marker.addListener('click', () => focusDevice(device.deviceId));
+                    markers.set(device.deviceId, marker);
+                } else {
+                    marker.setPosition(position);
+                    marker.setIcon(markerIcon(device));
+                }
+
+                if (Number.isFinite(device.lat) && Number.isFinite(device.lng)) {
+                    bounds.extend(position);
+                    hasCoordinates = true;
+                }
+            });
+
+            if (!selectedDeviceId && snapshot.length) {
+                selectedDeviceId = snapshot[0].deviceId;
+            }
+
+            renderDeviceList();
+            updateDetails(devices.get(selectedDeviceId) || snapshot[0] || null);
+
+            if (hasCoordinates && snapshot.length > 1) {
+                map.fitBounds(bounds, 80);
+            } else if (hasCoordinates && snapshot.length === 1) {
+                map.setCenter({ lat: snapshot[0].lat, lng: snapshot[0].lng });
+                map.setZoom(16);
+            }
+        }
+
+        socket.on('connect', () => setConnectionStatus(true));
+        socket.on('disconnect', () => setConnectionStatus(false));
+        socket.on('connect_error', () => setConnectionStatus(false));
+        socket.on('devicesSnapshot', renderSnapshot);
+        socket.on('locationChanged', (device) => {
+            const snapshot = Array.from(devices.values());
+            const index = snapshot.findIndex((item) => item.deviceId === device.deviceId);
+
+            if (index >= 0) {
+                snapshot[index] = device;
+            } else {
+                snapshot.push(device);
+            }
+
+            renderSnapshot(snapshot);
+        });
+    </script>
+</body>
+</html>
