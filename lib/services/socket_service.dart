@@ -72,6 +72,12 @@ class SocketService {
 
   bool get isConnected => _socket?.connected ?? false;
 
+  Function(Map<String, dynamic>)? _geofenceHandler;
+
+  void onGeofenceAlert(Function(Map<String, dynamic>) handler) {
+    _geofenceHandler = handler;
+  }
+
   void connect(String serverUrl, TrackingIdentity identity) {
     _socket?.dispose();
     _socket = io.io(serverUrl, <String, dynamic>{
@@ -98,6 +104,11 @@ class SocketService {
     _socket!.on('devicesSnapshot', _handleSnapshot);
     _socket!.on('allLocations', _handleLegacyAllLocations);
     _socket!.on('locationChanged', _handleSingleDeviceUpdate);
+    _socket!.on('geofenceAlert', (data) {
+      if (_geofenceHandler != null) {
+        _geofenceHandler!(Map<String, dynamic>.from(data));
+      }
+    });
     _socket!.onDisconnect((_) {});
 
     _socket!.connect();
@@ -124,14 +135,19 @@ class SocketService {
   }
 
   void _handleSnapshot(dynamic data) {
-    if (data is! List) {
+    List<dynamic> deviceList;
+    if (data is Map && data.containsKey('devices')) {
+      deviceList = data['devices'] as List<dynamic>;
+    } else if (data is List) {
+      deviceList = data;
+    } else {
       return;
     }
 
     _devices
       ..clear()
       ..addEntries(
-        data.whereType<Map>().map((item) {
+        deviceList.whereType<Map>().map((item) {
           final device = TrackedDevice.fromMap(Map<String, dynamic>.from(item));
           return MapEntry(device.deviceId, device);
         }),

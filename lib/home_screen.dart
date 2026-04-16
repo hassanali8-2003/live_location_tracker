@@ -28,6 +28,7 @@ class _HomeScreenState extends State<HomeScreen> {
   StreamSubscription<Position>? _locationSubscription;
   StreamSubscription<Map<String, TrackedDevice>>? _devicesSubscription;
   StreamSubscription<bool>? _connectionSubscription;
+  Timer? _heartbeatTimer;
   LatLng? _currentUserLocation;
   TrackingIdentity? _identity;
   List<UserTracker> _users = [];
@@ -80,6 +81,25 @@ class _HomeScreenState extends State<HomeScreen> {
         _users = users;
       });
     });
+
+    _socketService.onGeofenceAlert((alert) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'GEOFENCE: ${alert['device']} ${alert['type'] == 'ENTER' ? 'entered' : 'exited'} ${alert['fenceName']}',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            backgroundColor: alert['type'] == 'ENTER'
+                ? const Color(0xFF6C63FF)
+                : const Color(0xFFFF4B4B),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            margin: const EdgeInsets.all(20),
+          ),
+        );
+      }
+    });
   }
 
   Future<void> _initSocket() async {
@@ -91,25 +111,25 @@ class _HomeScreenState extends State<HomeScreen> {
   void _initLocation() async {
     final hasPermission = await _locationService.handleLocationPermission();
     if (!hasPermission) {
+      setState(() => _isSharing = false);
       return;
     }
+    _startTracking();
+  }
 
-    final pos = await _locationService.getCurrentPosition();
-    if (pos != null) {
-      setState(() {
-        _currentUserLocation = LatLng(pos.latitude, pos.longitude);
-      });
-      _moveToUser(_currentUserLocation!);
+  void _startTracking() {
+    _locationSubscription?.cancel();
+    _heartbeatTimer?.cancel();
 
-      final identity = _identity ?? await TrackingIdentity.current();
-      _identity = identity;
-      _socketService.sendLocation(
-        identity,
-        _currentUserLocation!,
-        accuracy: pos.accuracy,
-        speed: pos.speed,
-      );
-    }
+    // Initial Send
+    _sendLocation();
+
+    // 30-Second Heartbeat
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (mounted && _isSharing) {
+        _sendLocation();
+      }
+    });
 
     _locationSubscription = _locationService.getLocationStream().listen((
       Position position,
@@ -117,29 +137,68 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!_isSharing) {
         return;
       }
-
-      final newLatLng = LatLng(position.latitude, position.longitude);
-      final identity = _identity ?? await TrackingIdentity.current();
-      _identity = identity;
-
-      _socketService.sendLocation(
-        identity,
-        newLatLng,
-        accuracy: position.accuracy,
-        speed: position.speed,
-      );
-
-      if (mounted) {
-        setState(() {
-          _currentUserLocation = newLatLng;
-        });
-      }
+      _handlePositionUpdate(position);
     });
+  }
+
+  void _toggleSharing() async {
+    if (_isSharing) {
+      // TURN OFF: Stop local tracking and disconnect
+      _locationSubscription?.cancel();
+      _heartbeatTimer?.cancel();
+      _socketService.dispose();
+      
+      setState(() {
+        _isSharing = false;
+        _isConnected = false;
+        _users = [];
+      });
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Tracking Stopped & Disconnected')),
+      );
+    } else {
+      // TURN ON: Reconnect and start tracking
+      setState(() => _isSharing = true);
+      await _initSocket();
+      _startTracking();
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Tracking Resumed')),
+      );
+    }
+  }
+
+  Future<void> _sendLocation() async {
+    final pos = await _locationService.getCurrentPosition();
+    if (pos != null) {
+      _handlePositionUpdate(pos);
+    }
+  }
+
+  void _handlePositionUpdate(Position position) async {
+    final newLatLng = LatLng(position.latitude, position.longitude);
+    final identity = _identity ?? await TrackingIdentity.current();
+    _identity = identity;
+
+    _socketService.sendLocation(
+      identity,
+      newLatLng,
+      accuracy: position.accuracy,
+      speed: position.speed,
+    );
+
+    if (mounted) {
+      setState(() {
+        _currentUserLocation = newLatLng;
+      });
+    }
   }
 
   @override
   void dispose() {
     _locationSubscription?.cancel();
+    _heartbeatTimer?.cancel();
     _devicesSubscription?.cancel();
     _connectionSubscription?.cancel();
     _socketService.dispose();
@@ -269,7 +328,7 @@ class _HomeScreenState extends State<HomeScreen> {
             color: _isSharing
                 ? const Color(0xFF6C63FF)
                 : const Color(0xFF1C1D24),
-            onTap: () => setState(() => _isSharing = !_isSharing),
+            onTap: _toggleSharing,
             glow: _isSharing,
           ),
           const SizedBox(height: 16),

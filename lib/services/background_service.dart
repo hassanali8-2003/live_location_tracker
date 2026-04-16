@@ -78,8 +78,8 @@ class BackgroundTrackingService {
       service.stopSelf();
     });
 
-    // Tracking loop: Send location every 60 seconds (Heartbeat)
-    Timer.periodic(const Duration(seconds: 60), (timer) async {
+    // Tracking loop: Send location every 30 seconds (Heartbeat)
+    Timer.periodic(const Duration(seconds: 30), (timer) async {
       await _sendCurrentLocation(socketService, identity, service);
     });
 
