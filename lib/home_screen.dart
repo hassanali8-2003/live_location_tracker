@@ -27,9 +27,11 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isSharing = true;
   StreamSubscription<Position>? _locationSubscription;
   StreamSubscription<Map<String, TrackedDevice>>? _devicesSubscription;
+  StreamSubscription<bool>? _connectionSubscription;
   LatLng? _currentUserLocation;
   TrackingIdentity? _identity;
   List<UserTracker> _users = [];
+  bool _isConnected = false;
 
   static const CameraPosition _kInitialPosition = CameraPosition(
     target: LatLng(37.7749, -122.4194),
@@ -58,6 +60,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _bindSocketEvents() {
+    _connectionSubscription = _socketService.connectionStream.listen((connected) {
+      if (mounted) {
+        setState(() {
+          _isConnected = connected;
+        });
+      }
+    });
+
     _devicesSubscription = _socketService.devicesStream.listen((devices) {
       if (!mounted) {
         return;
@@ -131,6 +141,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _locationSubscription?.cancel();
     _devicesSubscription?.cancel();
+    _connectionSubscription?.cancel();
     _socketService.dispose();
     super.dispose();
   }
@@ -153,6 +164,7 @@ class _HomeScreenState extends State<HomeScreen> {
             zoomControlsEnabled: false,
             compassEnabled: false,
           ),
+          _buildConnectionBanner(),
           _buildPremiumHeader(),
           _buildSideActions(),
           _buildModernDraggableSheet(),
@@ -164,7 +176,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildPremiumHeader() {
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        padding: const EdgeInsets.fromLTRB(20, 40, 20, 12),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -475,17 +487,61 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _buildConnectionBanner() {
+    if (_isConnected) return const SizedBox.shrink();
+    
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: Container(
+        padding: const EdgeInsets.only(top: 40, bottom: 8),
+        color: const Color(0xFFFF4B4B).withOpacity(0.9),
+        child: const Center(
+          child: Text(
+            'CONNECTION LOST - RETRYING...',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 1.2,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Set<Marker> _buildMarkers() {
-    return _users.map((user) {
+    final markers = _users.map((user) {
+      final isMe = _identity?.deviceId == user.id;
       return Marker(
         markerId: MarkerId(user.id),
         position: user.position,
         onTap: () => _showPremiumUserSheet(user),
         icon: BitmapDescriptor.defaultMarkerWithHue(
-          user.isOnline ? BitmapDescriptor.hueAzure : BitmapDescriptor.hueCyan,
+          isMe ? BitmapDescriptor.hueViolet : (user.isOnline ? BitmapDescriptor.hueAzure : BitmapDescriptor.hueCyan),
         ),
+        infoWindow: InfoWindow(title: isMe ? "You (${user.name})" : user.name),
       );
     }).toSet();
+
+    // Ensure current user marker is there even if server hasn't synced yet
+    if (_currentUserLocation != null && _identity != null) {
+      final hasMe = markers.any((m) => m.markerId.value == _identity!.deviceId);
+      if (!hasMe) {
+        markers.add(
+          Marker(
+            markerId: MarkerId(_identity!.deviceId),
+            position: _currentUserLocation!,
+            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
+            infoWindow: InfoWindow(title: "You (${_identity!.deviceName})"),
+          ),
+        );
+      }
+    }
+
+    return markers;
   }
 
   void _moveToUser(LatLng pos) async {

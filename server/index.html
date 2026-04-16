@@ -11,8 +11,10 @@
     <style>
         body { font-family: 'Roboto', sans-serif; background: #0A0B10; color: #fff; margin: 0; padding: 0; overflow: hidden; }
         #map { height: 100vh; width: 100%; position: absolute; top: 0; left: 0; }
-        .dashboard { position: fixed; top: 20px; left: 20px; background: rgba(28, 29, 36, 0.95); padding: 25px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.05); z-index: 10; width: 340px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); backdrop-filter: blur(10px); max-height: calc(100vh - 40px); overflow: auto; }
-        h2 { color: #6C63FF; letter-spacing: 2px; margin-top: 0; font-size: 1.4rem; font-weight: 900; }
+        .dashboard { position: fixed; top: 20px; left: 20px; background: rgba(28, 29, 36, 0.95); padding: 25px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.05); z-index: 10; width: 340px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); backdrop-filter: blur(10px); max-height: calc(100vh - 40px); overflow-y: auto; scrollbar-width: none; }
+        .dashboard::-webkit-scrollbar { display: none; }
+        h2 { color: #6C63FF; letter-spacing: 2px; margin-top: 0; font-size: 1.4rem; font-weight: 900; display: flex; align-items: center; justify-content: space-between; }
+        .reload-btn { background: rgba(108, 99, 255, 0.2); border: 1px solid #6C63FF; color: #fff; padding: 5px 10px; border-radius: 8px; font-size: 0.7rem; cursor: pointer; }
         .stat { border-bottom: 1px solid rgba(255,255,255,0.05); padding: 15px 0; }
         .stat-label { font-size: 0.8rem; color: #888; text-transform: uppercase; margin-bottom: 5px; }
         .stat-value { font-size: 1.1rem; color: #fff; font-weight: bold; }
@@ -36,7 +38,10 @@
 </head>
 <body>
     <div class="dashboard">
-        <h2>GEOTRACK LIVE</h2>
+        <h2>
+            GEOTRACK LIVE
+            <button class="reload-btn" onclick="location.reload()">REFRESH</button>
+        </h2>
         <div class="stat">
             <div class="stat-label">System Status</div>
             <div id="system-status" class="stat-value"><span id="status-dot" class="live-indicator offline"></span>Connecting...</div>
@@ -91,28 +96,19 @@
         function resolveSocketUrl() {
             const params = new URLSearchParams(window.location.search);
             const queryValue = params.get('socketUrl');
-            if (queryValue) {
-                return queryValue;
-            }
-
-            if (window.location.port === '3000') {
-                return window.location.origin;
-            }
-
+            if (queryValue) return queryValue;
+            if (window.location.port === '3000') return window.location.origin;
             const hostname = window.location.hostname || 'localhost';
             return `http://${hostname}:3000`;
         }
 
         function setConnectionStatus(connected) {
             const status = document.getElementById('system-status');
-            const dot = document.getElementById('status-dot');
-
             if (connected) {
                 status.innerHTML = '<span id="status-dot" class="live-indicator"></span>Monitoring Active';
-                return;
+            } else {
+                status.innerHTML = '<span id="status-dot" class="live-indicator offline"></span>Disconnected';
             }
-
-            status.innerHTML = '<span id="status-dot" class="live-indicator offline"></span>Disconnected';
         }
 
         function initMap() {
@@ -149,19 +145,31 @@
             }
 
             document.getElementById('target-id').innerText = `${device.deviceName} (${device.platform})`;
-            document.getElementById('coords').innerText = `${device.lat.toFixed(5)}, ${device.lng.toFixed(5)}`;
-            document.getElementById('timestamp').innerText = new Date(device.timestamp).toLocaleString();
+
+            const lat = Number(device.lat);
+            const lng = Number(device.lng);
+            if (isNaN(lat) || isNaN(lng)) {
+                document.getElementById('coords').innerText = 'No location data yet';
+            } else {
+                document.getElementById('coords').innerText = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+            }
+
+            document.getElementById('timestamp').innerText = device.timestamp ? new Date(device.timestamp).toLocaleString() : 'Never';
         }
 
         function focusDevice(deviceId) {
             const device = devices.get(deviceId);
-            if (!device || !map) {
-                return;
-            }
+            if (!device || !map) return;
 
             selectedDeviceId = deviceId;
-            map.panTo({ lat: device.lat, lng: device.lng });
-            map.setZoom(16);
+            const lat = Number(device.lat);
+            const lng = Number(device.lng);
+
+            if (!isNaN(lat) && !isNaN(lng)) {
+                map.panTo({ lat, lng });
+                map.setZoom(16);
+            }
+
             updateDetails(device);
             renderDeviceList();
         }
@@ -216,7 +224,15 @@
 
             snapshot.forEach((device) => {
                 devices.set(device.deviceId, device);
-                const position = { lat: device.lat, lng: device.lng };
+
+                const lat = Number(device.lat);
+                const lng = Number(device.lng);
+
+                if (isNaN(lat) || isNaN(lng)) {
+                    return;
+                }
+
+                const position = { lat, lng };
                 let marker = markers.get(device.deviceId);
 
                 if (!marker) {
@@ -233,10 +249,8 @@
                     marker.setIcon(markerIcon(device));
                 }
 
-                if (Number.isFinite(device.lat) && Number.isFinite(device.lng)) {
-                    bounds.extend(position);
-                    hasCoordinates = true;
-                }
+                bounds.extend(position);
+                hasCoordinates = true;
             });
 
             if (!selectedDeviceId && snapshot.length) {
@@ -246,11 +260,18 @@
             renderDeviceList();
             updateDetails(devices.get(selectedDeviceId) || snapshot[0] || null);
 
-            if (hasCoordinates && snapshot.length > 1) {
-                map.fitBounds(bounds, 80);
-            } else if (hasCoordinates && snapshot.length === 1) {
-                map.setCenter({ lat: snapshot[0].lat, lng: snapshot[0].lng });
-                map.setZoom(16);
+            if (hasCoordinates && !window.hasInitiallyFocused) {
+                if (snapshot.filter(d => !isNaN(Number(d.lat))).length > 1) {
+                    map.fitBounds(bounds, 80);
+                    window.hasInitiallyFocused = true;
+                } else {
+                    const first = snapshot.find(d => !isNaN(Number(d.lat)));
+                    if (first) {
+                        map.setCenter({ lat: Number(first.lat), lng: Number(first.lng) });
+                        map.setZoom(15);
+                        window.hasInitiallyFocused = true;
+                    }
+                }
             }
         }
 
@@ -259,16 +280,8 @@
         socket.on('connect_error', () => setConnectionStatus(false));
         socket.on('devicesSnapshot', renderSnapshot);
         socket.on('locationChanged', (device) => {
-            const snapshot = Array.from(devices.values());
-            const index = snapshot.findIndex((item) => item.deviceId === device.deviceId);
-
-            if (index >= 0) {
-                snapshot[index] = device;
-            } else {
-                snapshot.push(device);
-            }
-
-            renderSnapshot(snapshot);
+            devices.set(device.deviceId, device);
+            renderSnapshot(Array.from(devices.values()));
         });
     </script>
 </body>

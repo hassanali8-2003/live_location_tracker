@@ -55,6 +55,8 @@ io.on('connection', (socket) => {
 
     socket.on('register', (payload) => {
         const device = normalizeRegisterPayload(payload, socket);
+        console.log(`Registering device: ${device.deviceName} (${device.deviceId}) on ${device.platform}`);
+
         const previous = trackedDevices.get(device.deviceId) || {};
 
         trackedDevices.set(device.deviceId, {
@@ -88,14 +90,14 @@ io.on('connection', (socket) => {
         trackedDevices.set(deviceId, device);
         socketToDevice.set(socket.id, deviceId);
 
-        console.log(`Update from ${deviceId}:`, device.lat, device.lng);
+        console.log(`Location Update [${device.deviceName}]: Lat ${device.lat}, Lng ${device.lng}, Speed: ${device.speed || 0} km/h`);
         io.emit('locationChanged', device);
         emitSnapshot();
     });
 
     socket.on('disconnect', () => {
-        console.log('Disconnected:', socket.id);
         const deviceId = socketToDevice.get(socket.id);
+        console.log('Disconnected:', socket.id, deviceId ? `(Device: ${deviceId})` : '');
         socketToDevice.delete(socket.id);
 
         if (!deviceId || !trackedDevices.has(deviceId)) {

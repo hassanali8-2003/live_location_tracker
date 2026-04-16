@@ -59,10 +59,14 @@ class SocketService {
   io.Socket? _socket;
   final StreamController<Map<String, TrackedDevice>> _devicesController =
       StreamController<Map<String, TrackedDevice>>.broadcast();
+  final StreamController<bool> _connectionController =
+      StreamController<bool>.broadcast();
   final Map<String, TrackedDevice> _devices = {};
 
   Stream<Map<String, TrackedDevice>> get devicesStream =>
       _devicesController.stream;
+
+  Stream<bool> get connectionStream => _connectionController.stream;
 
   Map<String, TrackedDevice> get devices => Map.unmodifiable(_devices);
 
@@ -79,7 +83,16 @@ class SocketService {
     });
 
     _socket!.onConnect((_) {
+      _connectionController.add(true);
       _socket!.emit('register', identity.toMap());
+    });
+
+    _socket!.onDisconnect((_) {
+      _connectionController.add(false);
+    });
+
+    _socket!.onConnectError((_) {
+      _connectionController.add(false);
     });
 
     _socket!.on('devicesSnapshot', _handleSnapshot);
