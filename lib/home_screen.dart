@@ -25,6 +25,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final SocketService _socketService = SocketService();
 
   bool _isSharing = true;
+  bool _hasInitiallyFocused = false; // Add this
   StreamSubscription<Position>? _locationSubscription;
   StreamSubscription<Map<String, TrackedDevice>>? _devicesSubscription;
   StreamSubscription<bool>? _connectionSubscription;
@@ -192,6 +193,12 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _currentUserLocation = newLatLng;
       });
+      
+      // Auto-center camera on first location fix
+      if (!_hasInitiallyFocused) {
+        _moveToUser(newLatLng);
+        _hasInitiallyFocused = true;
+      }
     }
   }
 
