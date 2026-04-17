@@ -6,15 +6,16 @@ import 'services/background_service.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Initialize Background Service
-  await BackgroundTrackingService.initializeService();
+  // Start the app immediately
+  runApp(const GeoTrackApp());
 
-  // Set system UI overlay style for a seamless full-screen look
+  // Initialize Background Service in the background so it doesn't block the UI
+  BackgroundTrackingService.initializeService();
+
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
   ));
-  runApp(const GeoTrackApp());
 }
 
 class GeoTrackApp extends StatelessWidget {
